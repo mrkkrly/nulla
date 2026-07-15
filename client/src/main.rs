@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::connect_async;
 
 use std::path::Path;
-use nulla_core::keys::Identity;
+use nulla_core::{event::Event, keys::Identity, message::{CloseMsg, EventMsg, Filter, ReqMsg}};
 
 fn load_or_create_identity(path: &str) -> Identity {
     if Path::new(path).exists() {
@@ -76,15 +76,60 @@ async fn main() {
                         break;
                     }
                     "help" => {
-                        println!("commands: help, post <text>, read, quit");
+                        println!("commands:");
+                        println!("  post <text>              publish a note");
+                        println!("  sub <name> <filter>      subscribe, e.g. sub feed {{\"kinds\":[1]}}");
+                        println!("  close <name>             cancel a subscription");
+                        println!("  quit                     exit");
                     }
                     "post" => {
+                        if rest.is_empty() {
+                            println!("usage: post <text>");
+                        } else {
+                            let ev = Event::create(&identity, 1, rest);
+                            let msg = EventMsg("EVENT".to_string(), ev);
+                            let json = serde_json::to_string(&msg).unwrap();
+                            if let Err(e) = ws_write.send(json.into()).await {
+                                println!("send failed: {e}");
+                            }
+                        }
                         // STUB — next step builds + signs + sends an EVENT.
-                        println!("(stub) would post: {rest}");
+
+                    }
+                    "sub" => {
+                        let mut sp = rest.splitn(2, ' ');
+                        let name = sp.next().unwrap_or("").trim();
+                        let filter_str = sp.next().unwrap_or("").trim();
+
+                        if name.is_empty() {
+                            println!("usage: sub <name> <filter-json>   e.g. sub feed {{\"kinds\":[1]}}");
+                        } else {
+                            let filter_json = if filter_str.is_empty() { "{}" } else { filter_str };
+                            match serde_json::from_str::<Filter>(filter_json) {
+                                Ok(filter) => {
+                                    let req = ReqMsg("REQ".to_string(), name.to_string(), filter);
+                                    let json = serde_json::to_string(&req).unwrap();
+                                    let _ = ws_write.send(json.into()).await;
+                                    println!("subscribed {name}");
+                                }
+                                Err(e) => println!("bad filter json: {e}")
+                            }
+                        }
                     }
                     "read" => {
                         // STUB — next step sends a REQ.
                         println!("(stub) would send REQ");
+                    }
+                    "close" => {
+                        if rest.is_empty() {
+                            println!("usage: close <name>")
+                        } else {
+                            let c = CloseMsg("CLOSE".to_string(), rest.to_string());
+                            let json = serde_json::to_string(&c).unwrap();
+                            let _ = ws_write.send(json.into()).await;
+                            println!("closing: {rest}")
+                        }
+
                     }
                     other => {
                         println!("unknown command: {other}");
@@ -96,7 +141,24 @@ async fn main() {
                 match maybe_msg {
                     Some(Ok(msg)) => {
                         if let Ok(text) = msg.to_text() {
-                            println!("\n[relay] {text}\nnulla› ");
+                            // println!("\n[relay] {text}\nnulla› ");
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+                                if val[0] == "EVENT" {
+                                    let sub = val[1].as_str().unwrap_or("?");
+                                    let content = val[2]["content"].as_str().unwrap_or("");
+                                    let pk = val[2]["pubkey"].as_str().unwrap_or("");
+                                    let short = &pk[..pk.len().min(8)];
+                                    println!("\n[{sub}] {short}: {content}");
+                                    print!("nulla› ");
+                                    use std::io::Write;
+                                    let _ = std::io::stdout().flush();
+                                    continue;
+                                }
+                            }
+                            println!("\n[relay] {text}");
+                            print!("nulla› ");
+                            use std::io::Write;
+                            let _ = std::io::stdout().flush();
                         }
                     }
                     Some(Err(e)) => { println!("ws error: {e}"); break; }

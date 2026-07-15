@@ -1,28 +1,26 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, broadcast};
 use tokio_tungstenite::accept_async;
 use futures_util::{StreamExt, SinkExt};
 
-mod event;
-mod keys;
-mod message;
 mod db;
-
-use event::Event;
-use keys::Identity;
-use message::{ClientMessage, EventMsg, ReqMsg};
 use db::Db;
+
+use nulla_core::event::Event;
+use nulla_core::keys::Identity;
+use nulla_core::message::{ClientMessage, CloseMsg, EventMsg, Filter, ReqMsg};
 
 #[tokio::main]
 async fn main() {
     // --- Throwaway: generate a valid ["EVENT", {...}] for testing. ---
     // Uncomment, run once, copy the printed line into websocat, then re-comment.
     //
-    let tmp = Identity::generate();
-    let ev = Event::create(&tmp, 1, "hello");
-    println!("{}", serde_json::to_string(&EventMsg("EVENT".into(), ev)).unwrap());
+    // let tmp = Identity::generate();
+    // let ev = Event::create(&tmp, 1, "hello");
+    // println!("{}", serde_json::to_string(&EventMsg("EVENT".into(), ev)).unwrap());
 
     // Shared in-memory event store (resets on restart).
     let store: Arc<Mutex<Db>> = Arc::new(Mutex::new(Db::open("relay.db")));
@@ -51,7 +49,7 @@ async fn main() {
             let mut rx = tx.subscribe();
 
             // This connection's current subscription (one at a time for now).
-            let mut active_sub: Option<(String, message::Filter)> = None;
+            let mut subs: HashMap<String, Filter> = HashMap::new();
 
             loop {
                 tokio::select! {
@@ -88,7 +86,12 @@ async fn main() {
                                         .send(format!("[\"EOSE\",\"{}\"]", sub_id).into())
                                         .await;
                                     // Remember it for live pushes.
-                                    active_sub = Some((sub_id, filter));
+                                    subs.insert(sub_id, filter);
+                                    // active_sub = Some((sub_id, filter));
+                                }
+                                Ok(ClientMessage::Close(CloseMsg(_, sub_id))) => {
+                                    subs.remove(&sub_id);
+                                    let _ = write.send(format!("CLOSED: {}", sub_id).into()).await;
                                 }
                                 Err(e) => {
                                     let _ = write
@@ -99,13 +102,11 @@ async fn main() {
                         }
                     }
 
-                    // Branch 2: a new event was broadcast by some connection.
                     Ok(ev) = rx.recv() => {
-                        if let Some((sub_id, filter)) = &active_sub {
+                        // Check the event against every active subscription on this connection.
+                        for (sub_id, filter) in &subs {
                             if filter.matches(&ev) {
-                                let out = serde_json::to_string(
-                                    &("EVENT", sub_id, &ev)
-                                ).unwrap();
+                                let out = serde_json::to_string(&("EVENT", sub_id, &ev)).unwrap();
                                 let _ = write.send(out.into()).await;
                             }
                         }

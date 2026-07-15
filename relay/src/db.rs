@@ -1,5 +1,5 @@
-use crate::event::Event;
-use crate::message::Filter;
+use nulla_core::event::Event;
+use nulla_core::message::Filter;
 use rusqlite::Connection;
 
 pub struct Db {

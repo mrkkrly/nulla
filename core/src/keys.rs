@@ -28,4 +28,17 @@ impl Identity {
         let (xonly, _) = XOnlyPublicKey::from_keypair(&self.keypair);
         hex::encode(xonly.serialize())
     }
+
+    pub fn secret_key_hex(&self) -> String {
+        hex::encode(self.keypair.secret_key().secret_bytes())
+    }
+
+    pub fn from_secret_hex(hex_str: &str) -> Option<Identity> {
+        let bytes = hex::decode(hex_str).ok()?;
+        let arr: [u8; 32] = bytes.try_into().ok()?;
+        let secret = SecretKey::from_byte_array(arr).ok()?;
+        let secp = Secp256k1::new();
+        let keypair = Keypair::from_secret_key(&secp, &secret);
+        Some(Identity { keypair, secp })
+    }
 }

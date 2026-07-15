@@ -6,6 +6,7 @@ use crate::event::Event;
 pub enum ClientMessage {
     Event(EventMsg),
     Req(ReqMsg),
+    Close(CloseMsg)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -14,6 +15,8 @@ pub struct EventMsg(pub String, pub Event); // ("EVENT", event)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReqMsg(pub String, pub String, pub Filter); // ("REQ", sub_id, filter)
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CloseMsg(pub String, pub String);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Filter {
